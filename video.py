@@ -12,27 +12,50 @@ import math
 
 
 # Load yolov4-custom weight and config of dataset Vietnam's traffic
-weightsPath = 'yolov4-custom_last.weights'
-configPath = 'yolov4-custom.cfg'
+# weightsPath = 'yolov4-custom_last.weights'
+# configPath = 'yolov4-custom.cfg'
+
+weightsPath = 'yolov3.weights'
+configPath = 'yolov3.cfg'
 net = cv2.dnn.readNet(configPath, weightsPath)
 
 # Load class and color of object
-classes = ["motorbike","car","truck","bus"]
-colors = {"motorbike":(255,255,0),"car":(255,0,255),"truck":(0,255,255),"bus":(0,0,255)}
+#YOLOv4
+#classes = ["motorbike","car","truck","bus"]
+#colors = {"motorbike":(255,255,0),"car":(255,0,255),"truck":(0,255,255),"bus":(0,0,255)}
+
+#YOLOv3
+classes = None
+
+with open("yolov3.txt", 'r') as f:
+    classes = [line.strip() for line in f.readlines()]
+
+colors = np.random.uniform(0, 255, size=(len(classes), 3))
 
 np.random.seed(42)
-COLORS = np.random.randint(0, 255, size=(200, 3),dtype="uint8")
+#COLORS = np.random.randint(0, 255, size=(200, 3),dtype="uint8")
 layer_names = net.getLayerNames()
 output_layers = [layer_names[i[0] - 1] for i in net.getUnconnectedOutLayers()]
 
 
-tracker = Sort()
+
+moto_tracker = Sort()
+car_tracker = Sort()
+truck_tracker = Sort()
+bus_tracker = Sort()
+
+
 memory = {}
-line = [(7, 441), (1000, 439)]
 counter = 0
 vector_list = []
-track_dict = {}
+track_dict0 = {}
+track_dict1 = {}
+track_dict2 = {}
+track_dict3 = {}
+
+
 paths_list = []
+MOTO_CLASS_ID = 1
 
 
 
@@ -77,9 +100,9 @@ def load_zone_anno(json_filename):
 
 
 #load and convert polygon and paths to numpy array
-polygon, paths = load_zone_anno('sample_02.json')
-
-
+polygon, paths = load_zone_anno('sample_01.json')
+pts = np.array(polygon)
+pts = pts.reshape((-1, 1, 2))
 
 
 for key, value in paths.items():
@@ -89,7 +112,7 @@ for key, value in paths.items():
 
 
 
-frame_id = 0
+frame_id = 1
 
 
 def cosin_similarity(a2d, b2d):
@@ -114,26 +137,33 @@ def counting_moi(paths, vector_list):
         moi_detection_list.append((last_frame, movement_id))
     return moi_detection_list
 
-def is_old(center_Xd, center_Yd, boxes):
-    for box_tracker in boxes:
-        (xt, yt, wt, ht) = [int(c) for c in box_tracker]
-        center_Xt, center_Yt = int((xt + (xt + wt)) / 2.0), int((yt + (yt + ht)) / 2.0)
-        distance = math.sqrt((center_Xt - center_Xd) ** 2 + (center_Yt - center_Yd) ** 2)
 
-        if distance < 50:
-            return True
-    return False
+def drawBox(img, bbox):
+    x, y , w, h = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
+    cv2.rectangle(img, (x,y), (x+w, y+h), (255, 0 , 255), 3, 1)
+    cv2.circle(img, (int(x+w/2), int(y+h/2)), 4, (0, 255, 0), -1)
+
+
+def append_track_dict(trackers, track_dict):
+    for xmin, ymin, xmax, ymax, track_id in trackers:
+        track_id = int(track_id)
+
+        if track_id not in track_dict.keys():
+            track_dict[track_id] = [(xmin, ymin, xmax, ymax, frame_id)]
+        else:
+            track_dict[track_id].append((xmin, ymin, xmax, ymax, frame_id))
+
 
 
 def predict(img):
-    global counter
+    global frame_id
     height, width, channels = img.shape
 
     # Detecting objects
     start_time = time.time()
     blob = cv2.dnn.blobFromImage(img, 0.00392, (224, 224), (0, 0, 0), True, crop=False)
     net.setInput(blob)
-    outs = net.forward(output_layers)
+    outs = net.forward(output_layers) #complete detected
     end = time.time()
     # Processing speed (FPS)
     print("FPS : {:.4}".format(1 / (end - start_time)))
@@ -164,151 +194,123 @@ def predict(img):
                 # Rectangle coordinates
                 x = int(center_x - w / 2)
                 y = int(center_y - h / 2)
-                #if check_bbox_intersect_polygon(polygon, (x, y, x + w, y + h)):
+
                 boxes.append([x, y, w, h])
-                print(boxes)
                 confidences.append(float(confidence))
                 class_ids.append(class_id)
 
+    #class ID: 0: motorbike, 1: car, 2: truck, 3: bus
+    #using non maximum suppression algorithm to remove overlap bounding box
     indexes = cv2.dnn.NMSBoxes(boxes, confidences, 0.5, 0.4)
-
-
-    # for i in range(len(boxes)):
-    #     if i in indexes:
-    #         x, y, w, h = boxes[i]
-    #         label = str(classes[class_ids[i]])
-    #         color=colors[label]
-    #         cv2.rectangle(img, (x, y), (x + w, y + h), color, 1)
-    #         font = cv2.FONT_HERSHEY_DUPLEX
-    #         cv2.putText(img, label, (x, y-2), font, 0.5, color, 1)
-    #         text = "{:.2f}%".format(confidences[i]*100)
-    #         #text1 = "{}".format(class_ids[i])
-    #         cv2.putText(img, text, (x, y - 15), font, 0.5, color, 1)
-    #
-    #         if check_bbox_intersect_polygon(polygon, (x,y,x+w,y+h)):
-    #             dets.append((frame_id, class_ids[i], x, y, x+w, y+h, confidences[i]) )
-    #         if onSegment(polygon[3], (x,y), polygon[0]):
-    #             counter +=1
-    #
-    # cv2.putText(img, str(counter), (10, 10), cv2.FONT_HERSHEY_DUPLEX, 0.5, (0, 255, 255), 1)
-
-    return boxes
-
-def get_box_info(box):
-    (x, y, w, h) = [int(v) for v in box]
-    center_x = int((x + w / 2.0))
-    center_y = int((y +h / 2.0))
-    return x, y, w, h, center_x, center_y
-
-
-max_distance = 50
-input_h = 360
-input_w = 460
-laser_line = input_h - 50
-# Khoi tao tham so
-frame_count = 0
-car_number = 0
-obj_cnt = 0
-curr_trackers = []
+    print("class_ids",class_ids)
+    dets = []
+    for bb, s, c in zip(boxes, confidences, class_ids):
+        xmin, ymin, w, h = bb
+        if check_bbox_intersect_polygon(polygon, (xmin, ymin, xmin+w, ymin+h)):
+            dets.append((frame_id, c, xmin, ymin, xmin+w, ymin+h, s))
+    print("dets: ", dets)
 
 
 
-while True:
+    dets = np.array(dets)
+    moto_dets = dets[dets[:, 1] == 0]
+    car_dets = dets[dets[:, 1] == 1]
+    truck_dets = dets[dets[:, 1] == 2]
+    bus_dets = dets[dets[:, 1] == 3]
 
-    cap = cv2.VideoCapture('video2.mp4')
+    #extract bbox parameters for 4 classes
+    moto_dets = moto_dets[:,2:6]
+    car_dets = car_dets[:, 2:6]
+    truck_dets = truck_dets[:, 2:6]
+    bus_dets = bus_dets[:, 2:6]
 
+
+    #covert to np array
+    moto_dets = np.array(moto_dets)
+    car_dets = np.array(car_dets)
+    truck_dets = np.array(truck_dets)
+    bus_dets = np.array(bus_dets)
+
+
+    #tracking object
+    trackers0 = moto_tracker.update(moto_dets)
+    trackers1 = car_tracker.update(car_dets)
+    trackers2 = truck_tracker.update(truck_dets)
+    trackers3 = bus_tracker.update(bus_dets)
+
+    #write to track_dict
+    append_track_dict(trackers0, track_dict0)
+    append_track_dict(trackers1, track_dict1)
+    append_track_dict(trackers2, track_dict2)
+    append_track_dict(trackers3, track_dict3)
+
+
+
+    for i in range(len(boxes)):
+        if i in indexes:
+            x, y, w, h = boxes[i]
+            label = str(classes[class_ids[i]])
+
+            #color using for YOLOv4
+            #color=colors[label]
+
+            #color using for YOLOv3
+            color = colors[class_ids[i]]
+
+            bbox = (x,y,w,h)
+
+
+            drawBox(img, bbox)
+
+            font = cv2.FONT_HERSHEY_DUPLEX
+            cv2.putText(img, label, (x, y-2), font, 0.5, color, 1)
+            text = "{:.2f}%".format(confidences[i]*100)
+            cv2.putText(img, text, (x, y - 15), font, 0.5, color, 1)
+
+    frame_id +=1
+    return img
+
+
+
+
+if __name__ == '__main__':
+
+    cap = cv2.VideoCapture('video4.mp4')
     if (cap.isOpened()== False):
         print("Error opening video stream or file")
 
     while(cap.isOpened()):
-        laser_line_color = (0, 0, 255)
-        boxes = []
+
         ret, frame = cap.read()
+        cv2.polylines(frame,[pts],True, (0,255,0),1)
         if ret == True:
-
-            # Resize nho lai
-            frame = cv2.resize(frame, (input_w, input_h))
-            # Duyet qua cac doi tuong trong tracker
-            old_trackers = curr_trackers
-            curr_trackers = []
+            predict(frame)
 
 
-            for car in old_trackers:
-                # Update tracker
-                tracker = car['tracker']
-                (_, box) = tracker.update(frame)
-                boxes.append(box)
+            print("track_dict0: ", track_dict0)
+            print("track_dict1: ", track_dict1)
+            print("track_dict2: ", track_dict2)
+            print("track_dict3: ", track_dict3)
 
-                new_obj = dict()
-                new_obj['tracker_id'] = car['tracker_id']
-                new_obj['tracker'] = tracker
-
-                # Tinh toan tam doi tuong
-                x, y, w, h, center_x, center_y = get_box_info(box)
-
-                # Ve hinh chu nhat quanh doi tuong
-                cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-
-                # Ve hinh tron tai tam doi tuong
-                cv2.circle(frame, (center_x, center_y), 4, (0, 255, 0), -1)
-
-                # So sanh tam doi tuong voi duong laser line
-                if center_y > laser_line:
-                    # Neu vuot qua thi khong track nua ma dem xe
-                    laser_line_color = (0, 255, 255)
-                    car_number += 1
-                else:
-                    # Con khong thi track tiep
-                    curr_trackers.append(new_obj)
-
-
-            # Thuc hien object detection moi 1 frame
-            if frame_count % 1 == 0:
-                # Detect doi tuong
-                boxes_d = predict(frame)
-
-                for box in boxes_d:
-                    old_obj = False
-
-                    xd, yd, wd, hd, center_Xd, center_Yd = get_box_info(box)
-
-                    if center_Yd <= laser_line - max_distance:
-
-                        # Duyet qua cac box, neu sai lech giua doi tuong detect voi doi tuong da track ko qua max_distance thi coi nhu 1 doi tuong
-                        if not is_old(center_Xd, center_Yd, boxes):
-                            cv2.rectangle(frame, (xd, yd), ((xd + wd), (yd + hd)), (0, 255, 255), 1)
-                            # Tao doi tuong tracker moi
-
-                            tracker = cv2.TrackerMOSSE_create()
-
-                            obj_cnt += 1
-                            new_obj = dict()
-                            tracker.init(frame, tuple(box))
-
-                            new_obj['tracker_id'] = obj_cnt
-                            new_obj['tracker'] = tracker
-
-                            curr_trackers.append(new_obj)
-
-            # Tang frame
-            frame_count += 1
-
-            # Hien thi so xe
-
-            cv2.putText(frame, "Number of vehicle: " + str(car_number), (10, 30), cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 255, 0),
-                        1)
-            cv2.putText(frame, "Press Esc to quit", (10, 50), cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 255, 0), 1)
-
-            # Draw laser line
-            cv2.line(frame, (0, laser_line), (input_w, laser_line), laser_line_color, 2)
-            cv2.putText(frame, "Line", (10, laser_line - 10), cv2.FONT_HERSHEY_DUPLEX, 0.5, laser_line_color, 1)
 
 
 
             cv2.imshow('Frame',frame)
             if cv2.waitKey(1) & 0xFF == ord('q'):
+                moto_vector_list = []
+                for tracker_id, tracker_list in track_dict0.items():
+                    if len(tracker_list) > 1:
+                        first = tracker_list[0]
+                        last = tracker_list[-1]
+                        first_point = ((first[2] - first[0]) / 2, (first[3] - first[1]) / 2)
+                        last_point = ((last[2] - last[0]) / 2, (last[3] - last[1]) / 2)
+                        moto_vector_list.append((first_point, last_point, last[4]))
+                print(moto_vector_list)
+                moto_moi_detections = counting_moi(paths, moto_vector_list)
+                print("moto_moi_detections", moto_moi_detections)
                 break
         else:
 
             break
+
     cap.release()
