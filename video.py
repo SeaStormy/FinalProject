@@ -1,4 +1,10 @@
-# Run: python3 video.py --video videos/video1.mp4
+'''FINAL PROJECT
+VEHICLE COUNTING AND ORIENTATION DETECTION
+SVTH: PHAM MINH HAI - PHAM VAN HUY
+'''
+
+
+#Import library
 import cv2
 import time
 import numpy as np
@@ -11,26 +17,28 @@ import math
 
 
 
-# Load yolov4-custom weight and config of dataset Vietnam's traffic
-# weightsPath = 'yolov4-custom_last.weights'
-# configPath = 'yolov4-custom.cfg'
+# Load YOLO model
+weightsPath = 'yolov4-custom_last.weights'
+configPath = 'yolov4-custom.cfg'
 
-weightsPath = 'yolov3.weights'
-configPath = 'yolov3.cfg'
+# weightsPath = 'yolov3.weights'
+# configPath = 'yolov3.cfg'
 net = cv2.dnn.readNet(configPath, weightsPath)
 
 # Load class and color of object
 #YOLOv4
-#classes = ["motorbike","car","truck","bus"]
-#colors = {"motorbike":(255,255,0),"car":(255,0,255),"truck":(0,255,255),"bus":(0,0,255)}
+classes = ["motorbike","car","truck","bus"]
+colors = {"motorbike":(255,255,0),"car":(255,0,255),"truck":(0,255,255),"bus":(0,0,255)}
 
 #YOLOv3
-classes = None
+# classes = None
+#
+# with open("classes.txt", 'r') as f:
+#     classes = [line.strip() for line in f.readlines()]
+#
+# colors = np.random.uniform(0, 255, size=(len(classes), 3))
 
-with open("yolov3.txt", 'r') as f:
-    classes = [line.strip() for line in f.readlines()]
 
-colors = np.random.uniform(0, 255, size=(len(classes), 3))
 
 np.random.seed(42)
 #COLORS = np.random.randint(0, 255, size=(200, 3),dtype="uint8")
@@ -39,6 +47,7 @@ output_layers = [layer_names[i[0] - 1] for i in net.getUnconnectedOutLayers()]
 
 
 
+#Instantiate trackers and variables
 moto_tracker = Sort()
 car_tracker = Sort()
 truck_tracker = Sort()
@@ -46,7 +55,6 @@ bus_tracker = Sort()
 
 
 memory = {}
-counter = 0
 vector_list = []
 track_dict0 = {}
 track_dict1 = {}
@@ -56,6 +64,10 @@ track_dict3 = {}
 
 paths_list = []
 MOTO_CLASS_ID = 1
+CAR_CLASS_ID = 2
+TRUCK_CLASS_ID = 3
+BUS_CLASS_ID = 4
+frame_id = 1
 
 
 
@@ -76,12 +88,6 @@ def check_bbox_intersect_polygon(polygon, bbox):
 
 
 # Return true if line segments AB and CD intersect
-def intersect(A,B,C,D):
-	return ccw(A,C,D) != ccw(B,C,D) and ccw(A,B,C) != ccw(A,B,D)
-
-def ccw(A,B,C):
-	return (C[1]-A[1]) * (B[0]-A[0]) > (B[1]-A[1]) * (C[0]-A[0])
-
 
 def load_zone_anno(json_filename):
     """
@@ -100,29 +106,37 @@ def load_zone_anno(json_filename):
 
 
 #load and convert polygon and paths to numpy array
-polygon, paths = load_zone_anno('sample_01.json')
+polygon, paths = load_zone_anno('sample_02.json')
 pts = np.array(polygon)
 pts = pts.reshape((-1, 1, 2))
 
-
+#convert path into list
 for key, value in paths.items():
     temp = value
     paths_list.append(temp)
     paths_list = list(paths_list)
+print(paths_list)
 
-
-
-frame_id = 1
 
 
 def cosin_similarity(a2d, b2d):
+
     a = np.array((a2d[1][0] - a2d[0][0], a2d[1][1] - a2d[0][1]))
     b = np.array((b2d[1][0] - b2d[0][1], b2d[1][1] - b2d[1][0]))
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
 
 
-def counting_moi(paths, vector_list):
+def counting_moi(paths, vector_list, CLASS_ID):
+    """
+
+    Args:
+      paths: List of direction and movement id
+      vector_list: vehicle movement vector
+
+    Returns:
+      movement id and frame with respective vehicle class
+    """
     moi_detection_list = []
     for moto_vector in vector_list:
         max_cosin = -2
@@ -134,17 +148,34 @@ def counting_moi(paths, vector_list):
                 max_cosin = cosin
                 movement_id = movement_label
                 last_frame = moto_vector[2]
-        moi_detection_list.append((last_frame, movement_id))
+        moi_detection_list.append((last_frame, movement_id, CLASS_ID))
     return moi_detection_list
 
 
 def drawBox(img, bbox):
+    """
+    DRAW A RECTANGLE BOX AROUND THE OBJECT
+    DETECTED
+    Args:
+      img: frame read from the file
+      bbox: A tuple (xmin, ymin, xmax, ymax)
+
+    """
     x, y , w, h = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
     cv2.rectangle(img, (x,y), (x+w, y+h), (255, 0 , 255), 3, 1)
     cv2.circle(img, (int(x+w/2), int(y+h/2)), 4, (0, 255, 0), -1)
 
 
 def append_track_dict(trackers, track_dict):
+    """
+
+    Args:
+      trackers: vehicle trackers
+      track_dict: a dictionary of bbox and frame id
+
+    Returns:
+
+    """
     for xmin, ymin, xmax, ymax, track_id in trackers:
         track_id = int(track_id)
 
@@ -173,6 +204,7 @@ def predict(img):
     class_ids = []
     confidences = []
     boxes = []
+    counter = 0
 
     # loop over each of the layer outputs
     for out in outs:
@@ -201,50 +233,9 @@ def predict(img):
 
     #class ID: 0: motorbike, 1: car, 2: truck, 3: bus
     #using non maximum suppression algorithm to remove overlap bounding box
-    indexes = cv2.dnn.NMSBoxes(boxes, confidences, 0.5, 0.4)
-    print("class_ids",class_ids)
+    indexes = cv2.dnn.NMSBoxes(boxes, confidences, 0.5, 0.3)
+
     dets = []
-    for bb, s, c in zip(boxes, confidences, class_ids):
-        xmin, ymin, w, h = bb
-        if check_bbox_intersect_polygon(polygon, (xmin, ymin, xmin+w, ymin+h)):
-            dets.append((frame_id, c, xmin, ymin, xmin+w, ymin+h, s))
-    print("dets: ", dets)
-
-
-
-    dets = np.array(dets)
-    moto_dets = dets[dets[:, 1] == 0]
-    car_dets = dets[dets[:, 1] == 1]
-    truck_dets = dets[dets[:, 1] == 2]
-    bus_dets = dets[dets[:, 1] == 3]
-
-    #extract bbox parameters for 4 classes
-    moto_dets = moto_dets[:,2:6]
-    car_dets = car_dets[:, 2:6]
-    truck_dets = truck_dets[:, 2:6]
-    bus_dets = bus_dets[:, 2:6]
-
-
-    #covert to np array
-    moto_dets = np.array(moto_dets)
-    car_dets = np.array(car_dets)
-    truck_dets = np.array(truck_dets)
-    bus_dets = np.array(bus_dets)
-
-
-    #tracking object
-    trackers0 = moto_tracker.update(moto_dets)
-    trackers1 = car_tracker.update(car_dets)
-    trackers2 = truck_tracker.update(truck_dets)
-    trackers3 = bus_tracker.update(bus_dets)
-
-    #write to track_dict
-    append_track_dict(trackers0, track_dict0)
-    append_track_dict(trackers1, track_dict1)
-    append_track_dict(trackers2, track_dict2)
-    append_track_dict(trackers3, track_dict3)
-
-
 
     for i in range(len(boxes)):
         if i in indexes:
@@ -252,10 +243,10 @@ def predict(img):
             label = str(classes[class_ids[i]])
 
             #color using for YOLOv4
-            #color=colors[label]
+            color=colors[label]
 
             #color using for YOLOv3
-            color = colors[class_ids[i]]
+            # color = colors[class_ids[i]]
 
             bbox = (x,y,w,h)
 
@@ -267,15 +258,91 @@ def predict(img):
             text = "{:.2f}%".format(confidences[i]*100)
             cv2.putText(img, text, (x, y - 15), font, 0.5, color, 1)
 
+
+            if check_bbox_intersect_polygon(polygon, bbox):
+                counter += 1
+                dets.append((frame_id, class_ids[i], x, y, x + w, y + h, confidences[i]))
+
+
+    # Tracking vehicle MOI in ROI
+    dets = np.array(dets)
+
+    #Only tracking if detect vehicle inside ROI
+    if (len(dets)>0):
+        moto_dets = dets[dets[:, 1] == 0]
+        car_dets = dets[dets[:, 1] == 1]
+        truck_dets = dets[dets[:, 1] == 2]
+        bus_dets = dets[dets[:, 1] == 3]
+
+        #extract bbox parameters for 4 classes
+        moto_dets = moto_dets[:,2:6]
+        car_dets = car_dets[:, 2:6]
+        truck_dets = truck_dets[:, 2:6]
+        bus_dets = bus_dets[:, 2:6]
+
+
+        #covert to np array
+        moto_dets = np.array(moto_dets)
+        car_dets = np.array(car_dets)
+        truck_dets = np.array(truck_dets)
+        bus_dets = np.array(bus_dets)
+
+
+        #tracking object
+        trackers0 = moto_tracker.update(moto_dets)
+        trackers1 = car_tracker.update(car_dets)
+        trackers2 = truck_tracker.update(truck_dets)
+        trackers3 = bus_tracker.update(bus_dets)
+
+        #write to track_dict
+        append_track_dict(trackers0, track_dict0)
+        append_track_dict(trackers1, track_dict1)
+        append_track_dict(trackers2, track_dict2)
+        append_track_dict(trackers3, track_dict3)
+
+    cv2.putText(img, "Number of vehicle in ROI: "+ str(counter), (20, 20), cv2.FONT_HERSHEY_DUPLEX, 0.5, (0,255,100), 1)
     frame_id +=1
+
     return img
 
 
+def tracking_moi(track_dict, vehicle_vector_list):
+    for tracker_id, tracker_list in track_dict.items():
+        if len(tracker_list) > 1:
+            first = tracker_list[0]
+            last = tracker_list[-1]
+            first_point = ((first[2] - first[0]) / 2, (first[3] - first[1]) / 2)
+            last_point = ((last[2] - last[0]) / 2, (last[3] - last[1]) / 2)
+            vehicle_vector_list.append((first_point, last_point, last[4]))
+    return  vehicle_vector_list
 
+
+def summary(vehicle_moi_detection):
+    huong1 = 0
+    huong2 = 0
+    huong3 = 0
+    huong4 = 0
+    huong5 = 0
+    huong6 = 0
+
+    for element in vehicle_moi_detection:
+        if element[1] == '1':
+            huong1 +=1
+        if element[1] == '2':
+            huong2 +=1
+        if element[1] == '3':
+            huong3 +=1
+        if element[1] == '4':
+            huong4 +=1
+        if element[1] == '5':
+            huong5 +=1
+        if element[1] == '6':
+            huong6 +=1
+    return huong1, huong2, huong3, huong4, huong5, huong6
 
 if __name__ == '__main__':
 
-    cap = cv2.VideoCapture('video4.mp4')
+    cap = cv2.VideoCapture('video2.mp4')
     if (cap.isOpened()== False):
         print("Error opening video stream or file")
 
@@ -286,31 +353,80 @@ if __name__ == '__main__':
         if ret == True:
             predict(frame)
 
-
-            print("track_dict0: ", track_dict0)
-            print("track_dict1: ", track_dict1)
-            print("track_dict2: ", track_dict2)
-            print("track_dict3: ", track_dict3)
-
-
+            #Draw paths
+            for element in paths_list:
+                cv2.arrowedLine(frame, element[0], element[1],(25,255,255), 1, tipLength= 0.05)
+                cv2.putText(frame, str(paths_list.index(element)+1), (int((element[0][0]+element[1][0])/2),int((element[0][1]+element[1][1])/2)), cv2.FONT_HERSHEY_DUPLEX, 2, (255,0,255), 2)
 
 
             cv2.imshow('Frame',frame)
             if cv2.waitKey(1) & 0xFF == ord('q'):
-                moto_vector_list = []
-                for tracker_id, tracker_list in track_dict0.items():
-                    if len(tracker_list) > 1:
-                        first = tracker_list[0]
-                        last = tracker_list[-1]
-                        first_point = ((first[2] - first[0]) / 2, (first[3] - first[1]) / 2)
-                        last_point = ((last[2] - last[0]) / 2, (last[3] - last[1]) / 2)
-                        moto_vector_list.append((first_point, last_point, last[4]))
-                print(moto_vector_list)
-                moto_moi_detections = counting_moi(paths, moto_vector_list)
-                print("moto_moi_detections", moto_moi_detections)
+
+                # moto_vector_list = []
+                # car_vector_list = []
+                # truck_vector_list = []
+                # bus_vector_list = []
+                #
+                # tracking_moi(track_dict0, moto_vector_list)
+                # tracking_moi(track_dict1, car_vector_list)
+                # tracking_moi(track_dict2, truck_vector_list)
+                # tracking_moi(track_dict3, bus_vector_list)
+                #
+                # moto_moi_detections = counting_moi(paths, moto_vector_list, MOTO_CLASS_ID)
+                # car_moi_detections = counting_moi(paths, car_vector_list,CAR_CLASS_ID)
+                # truck_moi_detections = counting_moi(paths, truck_vector_list, TRUCK_CLASS_ID)
+                # bus_moi_detections = counting_moi(paths, bus_vector_list, BUS_CLASS_ID)
+                #
+                # a, b, c, d, e, f = summary(moto_moi_detections)
+                # print("So xe may di theo huong 1: ", a)
+                # print("So xe may di theo huong 2: ", b)
+                # print("So xe may di theo huong 3: ", c)
+                # print("So xe may di theo huong 4: ", d)
+                # print("So xe may di theo huong 5: ", e)
+                # print("So xe may di theo huong 6: ", f)
+                #
+                # result_filename = 'result.txt'
+                # video_id = 'sample_02'
+                # with open(result_filename, 'a') as result_file:
+                #     for frame_id, movement_id, vehicle_class_id in moto_moi_detections or car_moi_detections:
+                #         result_file.write('{} {} {} {}\n'.format(video_id, frame_id, movement_id, vehicle_class_id))
                 break
         else:
+            moto_vector_list = []
+            car_vector_list = []
+            truck_vector_list = []
+            bus_vector_list = []
 
+            tracking_moi(track_dict0, moto_vector_list)
+            tracking_moi(track_dict1, car_vector_list)
+            tracking_moi(track_dict2, truck_vector_list)
+            tracking_moi(track_dict3, bus_vector_list)
+
+            moto_moi_detections = counting_moi(paths, moto_vector_list, MOTO_CLASS_ID)
+            car_moi_detections = counting_moi(paths, car_vector_list, CAR_CLASS_ID)
+            truck_moi_detections = counting_moi(paths, truck_vector_list, TRUCK_CLASS_ID)
+            bus_moi_detections = counting_moi(paths, bus_vector_list, BUS_CLASS_ID)
+
+            a, b, c,d,e,f = summary(moto_moi_detections)
+            print("So xe may di theo huong 1: ", a)
+            print("So xe may di theo huong 2: ", b)
+            print("So xe may di theo huong 3: ", c)
+            print("So xe may di theo huong 4: ", d)
+            print("So xe may di theo huong 5: ", e)
+            print("So xe may di theo huong 6: ", f)
+
+
+            result_filename = 'result.txt'
+            video_id = 'sample_02'
+            with open(result_filename, 'a') as result_file:
+                for frame_id, movement_id, vehicle_class_id in moto_moi_detections:
+                    result_file.write('{} {} {} {}\n'.format(video_id, frame_id, movement_id, vehicle_class_id))
+                for frame_id, movement_id, vehicle_class_id in car_moi_detections:
+                    result_file.write('{} {} {} {}\n'.format(video_id, frame_id, movement_id, vehicle_class_id))
+                for frame_id, movement_id, vehicle_class_id in truck_moi_detections:
+                    result_file.write('{} {} {} {}\n'.format(video_id, frame_id, movement_id, vehicle_class_id))
+                for frame_id, movement_id, vehicle_class_id in bus_moi_detections:
+                    result_file.write('{} {} {} {}\n'.format(video_id, frame_id, movement_id, vehicle_class_id))
             break
 
     cap.release()
